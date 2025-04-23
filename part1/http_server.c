@@ -34,6 +34,10 @@ int main(int argc, char **argv) {
     // TODO Complete the rest of this function
 
     // Socket Setup
+    /*
+    I have no idea if this works I just copied lecture slidees :p
+
+    */
     //  Step 1: Set up address info
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
