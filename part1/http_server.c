@@ -22,6 +22,12 @@ void handle_sigint(int signo) {
 }
 
 int main(int argc, char **argv) {
+    // Install SIGINT handler
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigaction(SIGINT, &sa, NULL);
+
     // First argument is directory to serve, second is port
     if (argc != 3) {
         printf("Usage: %s <directory> <port>\n", argv[0]);
@@ -45,7 +51,9 @@ int main(int argc, char **argv) {
     hints.ai_socktype = SOCK_STREAM;    // TCP
     hints.ai_flags = AI_PASSIVE;        // For binding (server)
 
-    int ret_val = getaddrinfo(NULL, port, &hints, &res);
+    // int ret_val = getaddrinfo(NULL, port, &hints, &res);
+    int ret_val = getaddrinfo("127.0.0.1", port, &hints, &res);    // Bind specifically to localhost
+
     if (ret_val != 0) {
         printf("getaddrinfo failed: %s\n", gai_strerror(ret_val));
         return 1;
@@ -84,7 +92,41 @@ int main(int argc, char **argv) {
 
     // You can now enter a loop to accept and handle connections...
     while (keep_going) {
-        // main server loop would go here
+        // Main Server Loop
+        struct sockaddr_storage client_addr;
+        socklen_t addr_size = sizeof(client_addr);
+        int conn_fd = accept(sock_fd, (struct sockaddr *) &client_addr, &addr_size);
+
+        if (conn_fd == -1) {
+            if (errno == EINTR) {
+                // Interrupted by SIGINT, break loop to shutdown
+                break;
+            }
+            perror("accept");
+            continue;
+        }
+
+        char resource_name[BUFSIZE];
+
+        // Step 1: Read HTTP request
+        if (read_http_request(conn_fd, resource_name) == -1) {
+            close(conn_fd);
+            continue;
+        }
+
+        // Step 2: Build full file path
+        char full_path[BUFSIZE * 2];
+        snprintf(full_path, sizeof(full_path), "%s%s", serve_dir, resource_name);
+
+        printf("Full path: %s\n", full_path);    // Debug print to check the full path
+
+        // Step 3: Write HTTP response
+        if (write_http_response(conn_fd, full_path) == -1) {
+            // Optionally log errors here
+        }
+
+        // Step 4: Close the connection socket
+        close(conn_fd);
     }
 
     // Cleanup
