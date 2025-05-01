@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,126 +11,150 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "connection_queue.h"
 #include "http.h"
 
 #define BUFSIZE 512
 #define LISTEN_QUEUE_LEN 5
+#define N_THREADS 5
+#define HOST "127.0.0.1"
 
 int keep_going = 1;
+const char *serve_dir;
+connection_queue_t conn_queue;    // Global connection queue
 
 void handle_sigint(int signo) {
     keep_going = 0;
+    connection_queue_shutdown(&conn_queue);
 }
 
-int main(int argc, char **argv) {
-    // Install SIGINT handler
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handle_sigint;
-    sigaction(SIGINT, &sa, NULL);
-
-    // First argument is directory to serve, second is port
-    if (argc != 3) {
-        printf("Usage: %s <directory> <port>\n", argv[0]);
-        return 1;
-    }
-    // Uncomment the lines below to use these definitions:
-    const char *serve_dir = argv[1];
-    const char *port = argv[2];
-
-    // TODO Complete the rest of this function
-
-    // Socket Setup
-    /*
-    I have no idea if this works I just copied lecture slidees :p
-
-    */
-    //  Step 1: Set up address info
-    struct addrinfo hints, *res;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;          // IPv4
-    hints.ai_socktype = SOCK_STREAM;    // TCP
-    hints.ai_flags = AI_PASSIVE;        // For binding (server)
-
-    // int ret_val = getaddrinfo(NULL, port, &hints, &res);
-    int ret_val = getaddrinfo("127.0.0.1", port, &hints, &res);    // Bind specifically to localhost
-
-    if (ret_val != 0) {
-        printf("getaddrinfo failed: %s\n", gai_strerror(ret_val));
-        return 1;
-    }
-
-    // Step 2: Create socket
-    int sock_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (sock_fd == -1) {
-        perror("socket");
-        freeaddrinfo(res);
-        return 1;
-    }
-
-    // Optional: set SO_REUSEADDR
-    int optval = 1;
-    setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-
-    // Step 3: Bind socket to port
-    if (bind(sock_fd, res->ai_addr, res->ai_addrlen) == -1) {
-        perror("bind");
-        close(sock_fd);
-        freeaddrinfo(res);
-        return 1;
-    }
-
-    freeaddrinfo(res);    // no longer needed
-
-    // Step 4: Listen on the socket
-    if (listen(sock_fd, LISTEN_QUEUE_LEN) == -1) {
-        perror("listen");
-        close(sock_fd);
-        return 1;
-    }
-
-    printf("Server is listening on port %s and serving directory %s\n", port, serve_dir);
-
-    // You can now enter a loop to accept and handle connections...
-    while (keep_going) {
-        // Main Server Loop
-        struct sockaddr_storage client_addr;
-        socklen_t addr_size = sizeof(client_addr);
-        int conn_fd = accept(sock_fd, (struct sockaddr *) &client_addr, &addr_size);
-
-        if (conn_fd == -1) {
-            if (errno == EINTR) {
-                // Interrupted by SIGINT, break loop to shutdown
-                break;
-            }
-            perror("accept");
-            continue;
+// Worker thread function
+void *worker_thread(void *arg) {
+    // TODO: Change this
+    while (1) {
+        int client_fd = connection_queue_dequeue(&conn_queue);
+        if (client_fd == -1) {
+            break;    // Queue shutdown
         }
 
         char resource_name[BUFSIZE];
 
         // Step 1: Read HTTP request
-        if (read_http_request(conn_fd, resource_name) == -1) {
-            close(conn_fd);
+        if (read_http_request(client_fd, resource_name) == -1) {
+            close(client_fd);
+            // TODO: Remove this
             continue;
         }
 
         // Step 2: Build full file path
         char full_path[BUFSIZE * 2];
         snprintf(full_path, sizeof(full_path), "%s%s", serve_dir, resource_name);
-
-        printf("Full path: %s\n", full_path);    // Debug print to check the full path
+        // printf("Full path: %s\n", full_path);    // Debug
 
         // Step 3: Write HTTP response
-        if (write_http_response(conn_fd, full_path) == -1) {
-            // Optionally log errors here
+        if (write_http_response(client_fd, full_path) == -1) {
+            // Optionally log errors
         }
 
-        // Step 4: Close the connection socket
-        close(conn_fd);
+        // Step 4: Close connection
+        close(client_fd);
+    }
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    // First argument is directory to serve, second is port
+    if (argc != 3) {
+        printf("Usage: %s <directory> <port>\n", argv[0]);
+        return 1;
+    }
+    // Uncomment the lines below to use these definitions:
+    serve_dir = argv[1];
+    const char *port = argv[2];
+
+    // Install signal handler
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigaction(SIGINT, &sa, NULL);
+
+    // Initialize connection queue
+    if (connection_queue_init(&conn_queue) == -1) {
+        perror("Failed to initialize connection queue");
+        return 1;
     }
 
-    // Cleanup
-    close(sock_fd);
+    // Create thread pool
+    pthread_t threads[N_THREADS];
+    for (int i = 0; i < N_THREADS; ++i) {
+        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
+            perror("Failed to create thread");
+            return 1;
+        }
+    }
+
+    // Set up socket
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    int ret_val = getaddrinfo(HOST, port, &hints, &res);
+    if (ret_val != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret_val));
+        return 1;
+    }
+
+    int listen_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (listen_fd == -1) {
+        perror("socket");
+        freeaddrinfo(res);
+        return 1;
+    }
+
+    int optval = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
+    if (bind(listen_fd, res->ai_addr, res->ai_addrlen) == -1) {
+        perror("bind");
+        close(listen_fd);
+        freeaddrinfo(res);
+        return 1;
+    }
+
+    freeaddrinfo(res);
+
+    if (listen(listen_fd, LISTEN_QUEUE_LEN) == -1) {
+        perror("listen");
+        close(listen_fd);
+        return 1;
+    }
+
+    // printf("Server is listening on port %s and serving directory %s\n", port, serve_dir);
+
+    // Accept loop
+    while (keep_going) {
+        int client_fd = accept(listen_fd, NULL, NULL);
+        if (client_fd == -1) {
+            if (errno == EINTR)
+                break;    // Graceful exit
+            perror("accept");
+            continue;
+        }
+
+        if (connection_queue_enqueue(&conn_queue, client_fd) == -1) {
+            close(client_fd);    // Drop if queue shut down
+        }
+    }
+
+    close(listen_fd);
+
+    // Wait for worker threads to finish
+    for (int i = 0; i < N_THREADS; ++i) {
+        pthread_join(threads[i], NULL);
+    }
+
+    connection_queue_free(&conn_queue);
     return 0;
 }
