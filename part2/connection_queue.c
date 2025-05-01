@@ -76,7 +76,7 @@ int connection_queue_dequeue(connection_queue_t *queue) {
     pthread_cond_signal(&queue->queue_full);
     pthread_mutex_unlock(&queue->lock);
 
-    return 0;
+    return connection_fd;
 }
 
 int connection_queue_shutdown(connection_queue_t *queue) {

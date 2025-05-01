@@ -86,12 +86,10 @@ int read_http_request(int fd, char *resource_name) {
 }
 
 int write_http_response(int fd, const char *resource_path) {
-    printf("Writing response for file: %s\n", resource_path);    // Debugging
 
     struct stat st;
     if (stat(resource_path, &st) == -1) {
         // File not found
-        printf("File not found: %s\n", resource_path);    // Debugging
 
         const char *response =
             "HTTP/1.0 404 Not Found\r\n"
