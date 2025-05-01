@@ -30,7 +30,6 @@ void handle_sigint(int signo) {
 
 // Worker thread function
 void *worker_thread(void *arg) {
-    // TODO: Change this
     while (1) {
         int client_fd = connection_queue_dequeue(&conn_queue);
         if (client_fd == -1) {
@@ -42,19 +41,15 @@ void *worker_thread(void *arg) {
         // Step 1: Read HTTP request
         if (read_http_request(client_fd, resource_name) == -1) {
             close(client_fd);
-            // TODO: Remove this
             continue;
         }
 
         // Step 2: Build full file path
         char full_path[BUFSIZE * 2];
         snprintf(full_path, sizeof(full_path), "%s%s", serve_dir, resource_name);
-        // printf("Full path: %s\n", full_path);    // Debug
 
         // Step 3: Write HTTP response
-        if (write_http_response(client_fd, full_path) == -1) {
-            // Optionally log errors
-        }
+        write_http_response(client_fd, full_path);
 
         // Step 4: Close connection
         close(client_fd);
@@ -63,12 +58,11 @@ void *worker_thread(void *arg) {
 }
 
 int main(int argc, char **argv) {
-    // First argument is directory to serve, second is port
     if (argc != 3) {
         printf("Usage: %s <directory> <port>\n", argv[0]);
         return 1;
     }
-    // Uncomment the lines below to use these definitions:
+
     serve_dir = argv[1];
     const char *port = argv[2];
 
@@ -78,13 +72,18 @@ int main(int argc, char **argv) {
     sa.sa_handler = handle_sigint;
     sigaction(SIGINT, &sa, NULL);
 
+    // Step 1: Block all signals before thread creation
+    sigset_t fullset, oldset;
+    sigfillset(&fullset);
+    pthread_sigmask(SIG_BLOCK, &fullset, &oldset);  // Block signals in main thread
+
     // Initialize connection queue
     if (connection_queue_init(&conn_queue) == -1) {
         perror("Failed to initialize connection queue");
         return 1;
     }
 
-    // Create thread pool
+    // Create thread pool (signals blocked)
     pthread_t threads[N_THREADS];
     for (int i = 0; i < N_THREADS; ++i) {
         if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
@@ -92,6 +91,9 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+
+    // Step 2: Restore main thread signal mask
+    pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 
     // Set up socket
     struct addrinfo hints, *res;
@@ -130,8 +132,6 @@ int main(int argc, char **argv) {
         close(listen_fd);
         return 1;
     }
-
-    // printf("Server is listening on port %s and serving directory %s\n", port, serve_dir);
 
     // Accept loop
     while (keep_going) {
