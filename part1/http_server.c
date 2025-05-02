@@ -33,27 +33,20 @@ int main(int argc, char **argv) {
         printf("Usage: %s <directory> <port>\n", argv[0]);
         return 1;
     }
-    // Uncomment the lines below to use these definitions:
+
     const char *serve_dir = argv[1];
     const char *port = argv[2];
 
-    // TODO Complete the rest of this function
-
     // Socket Setup
-    /*
-    I have no idea if this works I just copied lecture slidees :p
-
-    */
     //  Step 1: Set up address info
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;          // IPv4
     hints.ai_socktype = SOCK_STREAM;    // TCP
-    hints.ai_flags = AI_PASSIVE;        // For binding (server)
+    hints.ai_flags = AI_PASSIVE;        // For binding to server
 
-    // int ret_val = getaddrinfo(NULL, port, &hints, &res);
-    int ret_val = getaddrinfo("127.0.0.1", port, &hints, &res);    // Bind specifically to localhost
-
+    // Bind specifically to localhost
+    int ret_val = getaddrinfo("127.0.0.1", port, &hints, &res);
     if (ret_val != 0) {
         printf("getaddrinfo failed: %s\n", gai_strerror(ret_val));
         return 1;
@@ -66,10 +59,6 @@ int main(int argc, char **argv) {
         freeaddrinfo(res);
         return 1;
     }
-
-    // Optional: set SO_REUSEADDR
-    int optval = 1;
-    setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
     // Step 3: Bind socket to port
     if (bind(sock_fd, res->ai_addr, res->ai_addrlen) == -1) {
@@ -87,9 +76,7 @@ int main(int argc, char **argv) {
         close(sock_fd);
         return 1;
     }
-
-    printf("Server is listening on port %s and serving directory %s\n", port, serve_dir);
-
+    
     // You can now enter a loop to accept and handle connections...
     while (keep_going) {
         // Main Server Loop
@@ -110,6 +97,7 @@ int main(int argc, char **argv) {
 
         // Step 1: Read HTTP request
         if (read_http_request(conn_fd, resource_name) == -1) {
+            perror("read_http_request");
             close(conn_fd);
             continue;
         }
@@ -118,11 +106,12 @@ int main(int argc, char **argv) {
         char full_path[BUFSIZE * 2];
         snprintf(full_path, sizeof(full_path), "%s%s", serve_dir, resource_name);
 
-        printf("Full path: %s\n", full_path);    // Debug print to check the full path
-
         // Step 3: Write HTTP response
         if (write_http_response(conn_fd, full_path) == -1) {
-            // Optionally log errors here
+            perror("write_http_response");
+            close(conn_fd);
+            close(sock_fd);
+            return 1;
         }
 
         // Step 4: Close the connection socket

@@ -56,6 +56,18 @@ int read_http_request(int fd, char *resource_name) {
         return -1;
     }
 
+    // Check headers
+    while (fgets(line, sizeof(line), stream)) {
+        if (strcmp(line, "\r\n") == 0 || strcmp(line, "\n") == 0) {
+            break;
+        }
+    }
+    if (ferror(stream)) {
+        perror("fgets (headers)");
+        fclose(stream);
+        return -1;
+    }
+
     // Parse the request line: e.g., GET /quote.txt HTTP/1.1
     char method[8], path[BUFSIZE], version[16];
     if (sscanf(line, "%s %s %s", method, path, version) != 3) {
@@ -86,13 +98,9 @@ int read_http_request(int fd, char *resource_name) {
 }
 
 int write_http_response(int fd, const char *resource_path) {
-    printf("Writing response for file: %s\n", resource_path);    // Debugging
-
     struct stat st;
     if (stat(resource_path, &st) == -1) {
         // File not found
-        printf("File not found: %s\n", resource_path);    // Debugging
-
         const char *response =
             "HTTP/1.0 404 Not Found\r\n"
             "Content-Length: 0\r\n"
@@ -123,18 +131,26 @@ int write_http_response(int fd, const char *resource_path) {
     }
 
     // Write HTTP headers
-    dprintf(fd,
-            "HTTP/1.0 200 OK\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %ld\r\n"
-            "\r\n",
-            mime, file_size);
+    if (dprintf(fd,
+                "HTTP/1.0 200 OK\r\n"
+                "Content-Type: %s\r\n"
+                "Content-Length: %ld\r\n"
+                "\r\n",
+                mime, file_size) < 0) {
+        perror("dprintf");
+        close(file_fd);
+        return -1;
+    }
 
     // Send file content in chunks
     char buffer[BUFSIZE];
     ssize_t n;
     while ((n = read(file_fd, buffer, BUFSIZE)) > 0) {
-        write(fd, buffer, n);
+        ssize_t written = write(fd, buffer, n);
+        if (written == -1) {
+            perror("write (404 response)");
+            return -1;
+        }
     }
 
     close(file_fd);
