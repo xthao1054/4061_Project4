@@ -1,3 +1,0 @@
-$ curl -s -S http://localhost:$PORT/ocelot.jpg > downloaded_files/ocelot.jpg
-$ exit
-exit

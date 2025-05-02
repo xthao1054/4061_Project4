@@ -1,3 +1,0 @@
-$ curl -s -S http://localhost:$PORT/hard_drive.png > downloaded_files/hard_drive.png
-$ exit
-exit

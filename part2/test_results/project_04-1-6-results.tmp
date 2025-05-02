@@ -1,4 +1,0 @@
--- Requests the file 'courses.txt' from the server
-Expected output is in file 'test_results/raw/project_04-1-6-expected.tmp'
-Actual output is in file 'test_results/raw/project_04-1-6-actual.tmp'
-Test PASSED

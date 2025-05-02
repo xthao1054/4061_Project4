@@ -1,4 +1,0 @@
--- Requests the file 'mt2_practice.pdf' from the server
-Expected output is in file 'test_results/raw/project_04-1-7-expected.tmp'
-Actual output is in file 'test_results/raw/project_04-1-7-actual.tmp'
-Test PASSED

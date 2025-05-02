@@ -1,3 +1,0 @@
-$ curl -s -S http://localhost:$PORT/courses.txt > downloaded_files/courses.txt
-$ exit
-exit

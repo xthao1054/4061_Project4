@@ -1,3 +1,0 @@
-$ ./http_server server_files $PORT
-$ exit
-exit

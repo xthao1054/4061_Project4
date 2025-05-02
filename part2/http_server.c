@@ -24,7 +24,7 @@ const char *serve_dir;
 // Thread-safe queue for client connections
 connection_queue_t conn_queue;
 
-// Handle Ctrl+C (SIGINT) to gracefully shut down the server
+// Handle SIGINT to shut down the server
 void handle_sigint(int signo) {
     keep_going = 0;
     connection_queue_shutdown(&conn_queue);
@@ -39,17 +39,23 @@ void *worker_thread(void *arg) {
 
         // Try to read an HTTP request from the client
         if (read_http_request(client_fd, resource_name) == -1) {
-            // If invalid request, just close the connection
+            // If invalid request, close the connection
+            fprintf(stderr, "Error: Failed to read HTTP request\n");
             close(client_fd);
         } else {
             // Build the full path to the requested file
             char full_path[BUFSIZE * 2];
-            snprintf(full_path, sizeof(full_path), "%s%s", serve_dir, resource_name);
+            if (snprintf(full_path, sizeof(full_path), "%s%s", serve_dir, resource_name) >=
+                sizeof(full_path)) {
+                fprintf(stderr, "Error: Full path too long, closing connection\n");
+                close(client_fd);
+                continue;
+            }
 
             // Send the HTTP response with the requested file
             write_http_response(client_fd, full_path);
 
-            // Close connection after handling request
+            // Close connection
             close(client_fd);
         }
     }
@@ -71,13 +77,19 @@ int main(int argc, char **argv) {
     // Block all signals before starting worker threads
     sigset_t fullset, oldset;
     sigfillset(&fullset);
-    pthread_sigmask(SIG_BLOCK, &fullset, &oldset);
+    if (pthread_sigmask(SIG_BLOCK, &fullset, &oldset) != 0) {
+        perror("pthread_sigmask");
+        return 1;
+    }
 
     // Set up SIGINT handler for graceful shutdown
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_sigint;
-    sigaction(SIGINT, &sa, NULL);
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("sigaction");
+        return 1;
+    }
 
     // Initialize the connection queue
     if (connection_queue_init(&conn_queue) == -1) {
@@ -90,12 +102,21 @@ int main(int argc, char **argv) {
     for (int i = 0; i < N_THREADS; ++i) {
         if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
             perror("Failed to create thread");
+            // Clean up already created threads
+            for (int j = 0; j < i; ++j) {
+                pthread_cancel(threads[j]);
+                pthread_join(threads[j], NULL);
+            }
+            connection_queue_free(&conn_queue);
             return 1;
         }
     }
 
-    // Restore signal mask in main thread (workers still block signals)
-    pthread_sigmask(SIG_SETMASK, &oldset, NULL);
+    // Restore signal mask in main thread
+    if (pthread_sigmask(SIG_SETMASK, &oldset, NULL) != 0) {
+        perror("pthread_sigmask restore");
+        return 1;
+    }
 
     // Set up server socket using getaddrinfo
     struct addrinfo hints, *res;
@@ -118,9 +139,14 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Allow quick reuse of the port
+    // Set socket options to allow address reuse
     int optval = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) {
+        perror("setsockopt");
+        close(listen_fd);
+        freeaddrinfo(res);
+        return 1;
+    }
 
     // Bind the socket to the specified address and port
     if (bind(listen_fd, res->ai_addr, res->ai_addrlen) == -1) {
@@ -140,9 +166,8 @@ int main(int argc, char **argv) {
     }
 
     // Main accept loop
-    while (keep_going) {
+    while (keep_going == 1) {
         int client_fd = accept(listen_fd, NULL, NULL);
-
         int should_continue = 1;
 
         // Check for error or signal interruption
@@ -162,12 +187,13 @@ int main(int argc, char **argv) {
         if (should_continue && client_fd != -1) {
             if (connection_queue_enqueue(&conn_queue, client_fd) == -1) {
                 // Drop the connection if queue is shut down
+                fprintf(stderr, "Failed to enqueue client connection\n");
                 close(client_fd);
             }
         }
     }
 
-    // Clean up: close listening socket
+    // Close listening socket
     close(listen_fd);
 
     // Wait for all worker threads to finish
